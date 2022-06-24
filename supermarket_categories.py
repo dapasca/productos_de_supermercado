@@ -1,34 +1,59 @@
 from typing import List
 
-import pandas as pd
 import numpy as np
+import pandas as pd
+
+from categories_dict import category_corrections, supercategories
 
 
 class SupermarketCategories:
     def __init__(self,
                  dataset: pd.DataFrame,
-                 split_categories_path: str = 'split_categories.csv'):
+                 load_split_categories: bool = True,
+                 simplify_data: bool = True):
         """
         Operate with "Productos de supermercados" dataset
         from https://datamarket.es
 
         :param dataset: the dataset from https://datamarket.es
-        :param split_categories_path: The path to the categories.
-        If None categories will be estimated from self.dataset
+        :param load_split_categories: If True, loads 'split_categories.csv'
+        otherwise estimated if from self.dataset
         """
 
         self.dataset = dataset
         self.dataset['insert_date'] = \
             pd.to_datetime(self.dataset['insert_date'])
+        self.correct_categories()
 
-        if split_categories_path is not None:
+        if load_split_categories:
             self.category_and_subcategories = \
-                pd.read_csv(split_categories_path)
+                pd.read_csv('split_categories.csv')
         else:
             self.category_and_subcategories = self.iterative_split()
+            self.category_and_subcategories.to_csv(
+                'split_categories.csv', index=False)
 
         self.dataset = pd.merge(
             self.dataset, self.category_and_subcategories, on='category')
+
+        if simplify_data:
+            self.__simplify_dataset()
+
+    def correct_categories(self) -> pd.DataFrame:
+        """
+        Removes double '_' and
+        'el_mercado' from categories and
+
+        :return:
+        """
+
+        self.dataset.category = self.dataset.category.str.replace('__', '_')
+
+        f_el_mercado = self.dataset.category.str[:10] == 'el_mercado'
+        self.dataset.loc[f_el_mercado, 'category'] = \
+            self.dataset.loc[f_el_mercado, 'category'].str[11:]
+        return self.dataset
+
 
     @staticmethod
     def __split_with_junctions(category: str) -> List[str]:
@@ -40,15 +65,16 @@ class SupermarketCategories:
         :return: Split string
         """
         junction_list = ['y', 'e', 'de', 'del', 'para',
-                         'el', 'la', 'en', 'con', 'sin']
+                         'el', 'la', 'en', 'con', 'sin',
+                         'productos', 'cuidado']
 
         for junction in junction_list:
             category = \
-                ('_'+category).replace(f'_{junction}_', f' {junction} ')[1:]
+                ('_' + category).replace(f'_{junction}_', f' {junction} ')[1:]
             category = \
-                ('_'+category).replace(f' {junction}_', f' {junction} ')[1:]
+                ('_' + category).replace(f' {junction}_', f' {junction} ')[1:]
             category = \
-                ('_'+category).replace(f'_{junction} ', f' {junction} ')[1:]
+                ('_' + category).replace(f'_{junction} ', f' {junction} ')[1:]
         category_with_junctions = \
             [x.replace(' ', '_') for x in category.split('_')]
         return category_with_junctions
@@ -69,8 +95,6 @@ class SupermarketCategories:
 
         category_list = np.unique(categories)
         category_list.sort()
-        category_list = \
-            list(map(lambda s: s.replace('__', '_'), category_list))
 
         left_list = []
         right_list = []
@@ -84,11 +108,11 @@ class SupermarketCategories:
             category = self.__split_with_junctions(category_list[i])
             category_before = \
                 self.__split_with_junctions(
-                    category_list[i + 1]) if len(category_list) > i+1 else []
+                    category_list[i + 1]) if len(category_list) > i + 1 else []
 
             # Categories with repeated text split by repeated pattern
             if len(category) > 1:
-                for w_i in range(1, (len(category) // 2)+1):
+                for w_i in range(1, (len(category) // 2) + 1):
                     if all([category[i] == category[i + w_i]
                             for i in range(w_i)]):
                         left_category = '_'.join(category[w_i:])
@@ -121,7 +145,7 @@ class SupermarketCategories:
                             (match_before_i == w_i and match_after_i >= w_i)
 
                     if similarity_condition:
-                        if w_i+1 < len(category):
+                        if w_i + 1 < len(category):
                             pass
                         else:
                             left_category = '_'.join(category)
@@ -223,37 +247,99 @@ class SupermarketCategories:
         # Replicate "secondary_category" in the empty "type" rows
         f_no_type = category_and_subcategories['type'] == ''
         category_and_subcategories.loc[f_no_type, 'type'] = \
-        category_and_subcategories.loc[f_no_type, 'secondary_category']
+            category_and_subcategories.loc[f_no_type, 'secondary_category']
         self.category_and_subcategories = category_and_subcategories
 
         # TODO: This correction is due to a mistake that must be solved
-        self.flip_wrong_columns()
+        self.__flip_wrong_columns()
+        self.__handmade_category_corrections()
 
         if save:
             self.category_and_subcategories.to_csv('split_categories.csv',
                                                    index=False)
         return self.category_and_subcategories
 
-    def flip_wrong_columns(self):
+    def __flip_wrong_columns(self) -> pd.DataFrame:
         """
-        If columns are flipped, correct it
+        If columns are flipped in 'category_and_subcategories', correct it
         :return:
         """
-        f_fliped = self.category_and_subcategories.apply(
-            lambda x: x['category'].find(x['secondary_category']) +
-                      len(x['secondary_category']) + len(x['type']) -
-                      len(x['category']),
-            axis=1) > 0
+        f_flipped = self.category_and_subcategories.apply(
+            lambda x: x['category'].find(x['secondary_category']) + (
+                    len(x['secondary_category']) + len(x['type']) -
+                    len(x['category'])
+            ), axis=1) > 0
         secondary_category = self.category_and_subcategories.loc[
-            f_fliped, 'secondary_category']
-        type_category = self.category_and_subcategories.loc[f_fliped, 'type']
+            f_flipped, 'secondary_category']
+        type_category = self.category_and_subcategories.loc[f_flipped, 'type']
 
         self.category_and_subcategories.loc[
-            f_fliped, 'secondary_category'] = type_category
+            f_flipped, 'secondary_category'] = type_category
         self.category_and_subcategories.loc[
-            f_fliped, 'type'] = secondary_category
+            f_flipped, 'type'] = secondary_category
+
+        # Create super-categories
+        self.category_and_subcategories['supercategories'] = \
+            self.category_and_subcategories['main_category'].map(
+                supercategories)
+
+        return self.category_and_subcategories
+
+    def __handmade_category_corrections(self) -> pd.DataFrame:
+        """
+        Move part of the 'main_category' name to the 'secondary_category' name
+        :return:
+        """
+
+        for original_category in category_corrections.keys():
+            f_original_category = \
+                self.category_and_subcategories.main_category ==\
+                original_category
+            self.category_and_subcategories.loc[
+                f_original_category, 'main_category'] = \
+                category_corrections[original_category]
+            self.category_and_subcategories.loc[
+                f_original_category, 'secondary_category'] = \
+                original_category[
+                len(category_corrections[original_category]) + 1:] + '_' + \
+                self.category_and_subcategories.loc[
+                    f_original_category, 'secondary_category']
+
+        return self.category_and_subcategories
+
+    def __simplify_dataset(self,
+                           only_full_range: bool = False) -> pd.DataFrame:
+        """
+        Reduces de dataset to keep only useful data for visualization by:
+        1. Dropping unnecessary columns
+        2. Keeping only one value per month
+        3. Keeping only IDs with data each month (optional)
+
+        :param only_full_range: Keeps only IDs with data each month
+        :return:
+        """
+        # Drop unnecessary columns for visualization
+        self.dataset = self.dataset.drop(
+            columns=['url', 'name', 'category', 'description'])
+
+        # Group by month
+        self.dataset = self.dataset.groupby([
+            pd.Grouper(key='insert_date', freq='M'), 'product_id']).last()
+        self.dataset = self.dataset.reset_index()
+
+        # Drop timeseries without full daterange
+        if only_full_range:
+            id_counts = self.dataset.product_id.value_counts()
+            f_max_counts = id_counts == id_counts.max()
+            id_full_timeseries = id_counts[f_max_counts].index.values
+            f_full_timeseries = \
+                self.dataset.product_id.isin(id_full_timeseries)
+            self.dataset = self.dataset[f_full_timeseries]
+
+        return self.dataset
 
 
 if __name__ == '__main__':
     df = pd.read_csv('datamarket_productos_de_supermercados.csv')
-    sc = SupermarketCategories(df, split_categories_path=None)
+    sc = SupermarketCategories(df, load_split_categories=False)
+    sc.dataset.to_csv('datamarket.csv', index=False)

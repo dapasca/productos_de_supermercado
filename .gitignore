@@ -1,0 +1,6 @@
+datamarket_productos_de_supermercados.csv
+partition*
+.idea
+.ipynb*
+__pycache__
+venv
