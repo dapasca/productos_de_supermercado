@@ -10,19 +10,25 @@ class SupermarketCategories:
     def __init__(self,
                  dataset: pd.DataFrame,
                  load_split_categories: bool = True,
-                 simplify_data: bool = True):
+                 simplify_data: bool = True,
+                 price_diff: bool = True,
+                 remove_wrong_extreme_prices: bool = True,
+                 full_series_boolean: bool = True):
         """
         Operate with "Productos de supermercados" dataset
         from https://datamarket.es
 
         :param dataset: the dataset from https://datamarket.es
         :param load_split_categories: If True, loads 'split_categories.csv'
+        :param price_diff: If True, adds price diff to max date entries
         otherwise estimated if from self.dataset
+        :param remove_wrong_extreme_prices: Remove wroung 'price' and
+        'reference_price' values from Carrefour and Mercadona
         """
 
         self.dataset = dataset
         self.dataset['insert_date'] = \
-            pd.to_datetime(self.dataset['insert_date'])
+            pd.to_datetime(self.dataset['insert_date']).dt.to_period('M')
         self.correct_categories()
 
         if load_split_categories:
@@ -34,10 +40,26 @@ class SupermarketCategories:
                 'split_categories.csv', index=False)
 
         self.dataset = pd.merge(
-            self.dataset, self.category_and_subcategories, on='category')
+            self.dataset, self.category_and_subcategories,
+            on='category')
 
         if simplify_data:
             self.__simplify_dataset()
+        if price_diff:
+            self.__add_price_diff()
+        if remove_wrong_extreme_prices:
+            self.__remove_wrong_extreme_prices()
+        if full_series_boolean:
+            self.__full_series_boolean()
+
+    def __full_series_boolean(self) -> pd.DataFrame:
+        value_counts = self.dataset.product_id.value_counts()
+        ids_full_series = value_counts[
+            value_counts == value_counts.max()].index.values
+        self.dataset['full_series'] = \
+            self.dataset.product_id.isin(ids_full_series)
+
+        return self.category_and_subcategories
 
     def correct_categories(self) -> pd.DataFrame:
         """
@@ -53,7 +75,6 @@ class SupermarketCategories:
         self.dataset.loc[f_el_mercado, 'category'] = \
             self.dataset.loc[f_el_mercado, 'category'].str[11:]
         return self.dataset
-
 
     @staticmethod
     def __split_with_junctions(category: str) -> List[str]:
@@ -253,6 +274,7 @@ class SupermarketCategories:
         # TODO: This correction is due to a mistake that must be solved
         self.__flip_wrong_columns()
         self.__handmade_category_corrections()
+        self.__create_super_categories()
 
         if save:
             self.category_and_subcategories.to_csv('split_categories.csv',
@@ -277,6 +299,14 @@ class SupermarketCategories:
             f_flipped, 'secondary_category'] = type_category
         self.category_and_subcategories.loc[
             f_flipped, 'type'] = secondary_category
+
+        return self.category_and_subcategories
+
+    def __create_super_categories(self) -> pd.DataFrame:
+        """
+        Add a column with handmade super-categories
+        :return:
+        """
 
         # Create super-categories
         self.category_and_subcategories['supercategories'] = \
@@ -320,11 +350,11 @@ class SupermarketCategories:
         """
         # Drop unnecessary columns for visualization
         self.dataset = self.dataset.drop(
-            columns=['url', 'name', 'category', 'description'])
+            columns=['url', 'category', 'description'])
 
         # Group by month
-        self.dataset = self.dataset.groupby([
-            pd.Grouper(key='insert_date', freq='M'), 'product_id']).last()
+        self.dataset = self.dataset.groupby(['insert_date', 'product_id']
+                                            ).last()
         self.dataset = self.dataset.reset_index()
 
         # Drop timeseries without full daterange
@@ -335,6 +365,72 @@ class SupermarketCategories:
             f_full_timeseries = \
                 self.dataset.product_id.isin(id_full_timeseries)
             self.dataset = self.dataset[f_full_timeseries]
+
+        return self.dataset
+
+    def __add_price_diff(self) -> pd.DataFrame:
+        """
+        Add 1 year price diff to the max date products entry when possible
+        :return:
+        """
+        year = self.dataset.insert_date.max().year
+        month = self.dataset.insert_date.max().month
+        day = self.dataset.insert_date.max().day
+
+        f_last = self.dataset.insert_date == f'{year}-{month}-{day}'
+        f_first = self.dataset.insert_date == f'{year - 1}-{month}-{day}'
+
+        price_diff = self.dataset.loc[f_first | f_last].pivot_table(
+            values='reference_price',
+            index='product_id',
+            columns='insert_date')
+        price_diff = price_diff.iloc[:, 1] - price_diff.iloc[:, 0]
+
+        df_price_diff = pd.DataFrame({'price_diff': price_diff,
+                                      'insert_date':
+                                          pd.to_datetime(f'{year}-{month}')})
+        df_price_diff.insert_date = df_price_diff.insert_date.dt.to_period('M')
+        df_price_diff = df_price_diff.reset_index()
+        self.dataset = pd.merge(self.dataset, df_price_diff, how='left')
+
+        return self.dataset
+
+    def __remove_wrong_extreme_prices(self) -> pd.DataFrame:
+        """
+        Correct specific Carrefour and Mercadona data mistakes.
+        * Carrefour got 'reference_price' 1000 times bigger than it should be
+        for products with 'ud' as reference_unit
+        * Mercadona got 'price' 99 times bigger than it should be
+        for products with 'kg' as reference_unit
+        :return:
+        """
+
+        # Wrong Carrefour reference prices
+        f_carrefour = self.dataset.supermarket == 'carrefour-es'
+        f_ud = self.dataset.reference_unit == 'ud'
+        f_ratio = \
+            self.dataset.reference_price / self.dataset.price == 1000
+        unique_wrong_ids = \
+            self.dataset[f_carrefour & f_ud & f_ratio].product_id.unique()
+
+        self.dataset.loc[
+            self.dataset.product_id.isin(unique_wrong_ids),
+            'reference_price'] = self.dataset.loc[
+            self.dataset.product_id.isin(unique_wrong_ids),
+            'price']
+
+        # Wrong Mercadona prices
+        f_mercadona = self.dataset.supermarket == 'mercadona-es'
+        f_kg = self.dataset.reference_unit == 'kg'
+        f_ratio = \
+            self.dataset.price / self.dataset.reference_price == 99
+        unique_wrong_ids = \
+            self.dataset[f_mercadona & f_kg & f_ratio].product_id.unique()
+
+        self.dataset.loc[
+            self.dataset.product_id.isin(unique_wrong_ids),
+            'price'] = self.dataset.loc[
+            self.dataset.product_id.isin(unique_wrong_ids), 'reference_price']
 
         return self.dataset
 
