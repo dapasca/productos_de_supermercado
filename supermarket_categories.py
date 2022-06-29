@@ -381,7 +381,7 @@ class SupermarketCategories:
         f_first = self.dataset.insert_date == f'{year - 1}-{month}-{day}'
 
         price_diff = self.dataset.loc[f_first | f_last].pivot_table(
-            values='reference_price',
+            values='price',
             index='product_id',
             columns='insert_date')
         price_diff = price_diff.iloc[:, 1] - price_diff.iloc[:, 0]
