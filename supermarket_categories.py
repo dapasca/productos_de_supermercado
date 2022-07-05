@@ -3,7 +3,7 @@ from typing import List
 import numpy as np
 import pandas as pd
 
-from categories_dict import category_corrections, supercategories
+from categories_dict import *
 
 
 class SupermarketCategories:
@@ -13,7 +13,9 @@ class SupermarketCategories:
                  simplify_data: bool = True,
                  price_diff: bool = True,
                  remove_wrong_extreme_prices: bool = True,
-                 full_series_boolean: bool = True):
+                 full_series_boolean: bool = True,
+                 unify_description_by_id: bool = True,
+                 beautify_str: bool = True):
         """
         Operate with "Productos de supermercados" dataset
         from https://datamarket.es
@@ -24,6 +26,11 @@ class SupermarketCategories:
         otherwise estimated if from self.dataset
         :param remove_wrong_extreme_prices: Remove wroung 'price' and
         'reference_price' values from Carrefour and Mercadona
+        :param full_series_boolean: Add bool column
+        identifying ID with data each month
+        :param unify_description_by_id: unify names and categories
+        for the same ID
+        :param beautify_str: Names in data beautified
         """
 
         self.dataset = dataset
@@ -45,14 +52,22 @@ class SupermarketCategories:
 
         if simplify_data:
             self.__simplify_dataset()
+        if unify_description_by_id:
+            self.__unify_description_by_id()
         if price_diff:
             self.__add_price_diff()
         if remove_wrong_extreme_prices:
             self.__remove_wrong_extreme_prices()
         if full_series_boolean:
             self.__full_series_boolean()
+        if beautify_str:
+            self.__beautify_str()
 
     def __full_series_boolean(self) -> pd.DataFrame:
+        """
+        Add bool column identifying ID with data each month
+        :return:
+        """
         value_counts = self.dataset.product_id.value_counts()
         ids_full_series = value_counts[
             value_counts == value_counts.max()].index.values
@@ -431,6 +446,45 @@ class SupermarketCategories:
             self.dataset.product_id.isin(unique_wrong_ids),
             'price'] = self.dataset.loc[
             self.dataset.product_id.isin(unique_wrong_ids), 'reference_price']
+
+        return self.dataset
+
+    def __unify_description_by_id(self) -> pd.DataFrame:
+        """
+        Some IDs got different name and category.
+        Unify all with the last assigned name
+        :return:
+        """
+
+        last_nomenclature = \
+            self.dataset.sort_values('insert_date').groupby('product_id')[
+                fix_columns].last().reset_index()
+        self.dataset = pd.merge(
+            self.dataset[variable_columns], last_nomenclature, on='product_id'
+        )[full_columns]
+
+        return self.dataset
+
+    def __beautify_str(self) -> pd.DataFrame:
+        """
+        Change supermarket names into a more aesthetic expression
+        and capitalize
+
+        :return:
+        """
+        self.dataset = self.dataset.replace({
+            'carrefour-es': 'Carrefour',
+            'dia-es': 'Dia',
+            'mercadona-es': 'Mercadona',
+        })
+
+        category_col = \
+            ['main_category', 'secondary_category', 'type', 'supercategories']
+        for col in category_col:
+            self.dataset[col] = \
+                self.dataset[col].str.replace('_', ' ').str.capitalize()
+
+        self.dataset = self.dataset[~self.dataset.supercategories.isna()]
 
         return self.dataset
 

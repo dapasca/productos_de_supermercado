@@ -102,3 +102,12 @@ supercategories = {
     'soy_solidario': None,
     'verduras_y_hortalizas': 'fruta_y_verdura',
     'zumos': 'bebidas', }
+
+full_columns = ['insert_date', 'product_id', 'supermarket', 'name',
+                'price', 'reference_price', 'reference_unit',
+                'main_category', 'secondary_category', 'type',
+                'supercategories']
+variable_columns = ['insert_date', 'product_id', 'supermarket',
+                    'price', 'reference_price']
+fix_columns = ['name', 'reference_unit', 'main_category',
+               'secondary_category', 'type', 'supercategories']
